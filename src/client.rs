@@ -1,13 +1,6 @@
 use r2d2::Pool;
-use std::collections::hash_map::DefaultHasher;
+use r2d2::PooledConnection;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use url::Url;
-
-#[cfg(not(feature = "mcrouter"))]
-use crate::protocol::Protocol;
-#[cfg(not(feature = "mcrouter"))]
-use std::time::Duration;
 
 use crate::connection::ConnectionManager;
 use crate::error::{ClientError, MemcacheError};
@@ -17,51 +10,8 @@ use crate::value::{FromMemcacheValueExt, ToMemcacheValue};
 
 pub type Stats = HashMap<String, String>;
 
-pub trait Connectable {
-    fn get_urls(self) -> Vec<String>;
-}
-
-impl Connectable for String {
-    fn get_urls(self) -> Vec<String> {
-        return vec![self];
-    }
-}
-
-impl Connectable for Vec<String> {
-    fn get_urls(self) -> Vec<String> {
-        return self;
-    }
-}
-
-impl Connectable for &str {
-    fn get_urls(self) -> Vec<String> {
-        return vec![self.to_string()];
-    }
-}
-
-impl Connectable for Vec<&str> {
-    fn get_urls(self) -> Vec<String> {
-        let mut urls = vec![];
-        for url in self {
-            urls.push(url.to_string());
-        }
-        return urls;
-    }
-}
-
-#[derive(Clone)]
-pub struct Client {
-    connections: Vec<Pool<ConnectionManager>>,
-    pub hash_function: fn(&str) -> u64,
-}
-
-unsafe impl Send for Client {}
-
-fn default_hash_function(key: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    return hasher.finish();
-}
+#[derive(Clone, Debug)]
+pub struct Client(Pool<ConnectionManager>);
 
 pub(crate) fn check_key_len(key: &str) -> Result<(), MemcacheError> {
     if key.len() > 250 {
@@ -71,81 +21,18 @@ pub(crate) fn check_key_len(key: &str) -> Result<(), MemcacheError> {
 }
 
 impl Client {
-    #[deprecated(since = "0.10.0", note = "please use `connect` instead")]
-    pub fn new<C: Connectable>(target: C) -> Result<Self, MemcacheError> {
-        return Self::connect(target);
+    pub fn with_pool(pool: Pool<ConnectionManager>) -> Self {
+        Self(pool)
     }
 
-    pub fn with_pool_size<C: Connectable>(target: C, size: u32) -> Result<Self, MemcacheError> {
-        let urls = target.get_urls();
-        let mut connections = vec![];
-        for url in urls {
-            let parsed = Url::parse(url.as_str())?;
-            let pool = r2d2::Pool::builder()
-                .max_size(size)
-                .build(ConnectionManager::new(parsed))?;
-            connections.push(pool);
-        }
-        Ok(Client {
-            connections,
-            hash_function: default_hash_function,
-        })
+    /// Get pool connection
+    pub fn get_connection(&self) -> Result<PooledConnection<ConnectionManager>, MemcacheError> {
+        Ok(self.0.get()?)
     }
 
-    pub fn with_pool(pool: Pool<ConnectionManager>) -> Result<Self, MemcacheError> {
-        Ok(Client {
-            connections: vec![pool],
-            hash_function: default_hash_function,
-        })
-    }
-
-    pub fn connect<C: Connectable>(target: C) -> Result<Self, MemcacheError> {
-        Self::with_pool_size(target, 1)
-    }
-
-    fn get_connection(&self, key: &str) -> Pool<ConnectionManager> {
-        let connections_count = self.connections.len();
-        return self.connections[(self.hash_function)(key) as usize % connections_count].clone();
-    }
-
-    /// Set the socket read timeout for TCP connections.
-    ///
-    /// Example:
-    ///
-    /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
-    /// client.set_read_timeout(Some(::std::time::Duration::from_secs(3))).unwrap();
-    /// ```
-    #[cfg(not(feature = "mcrouter"))]
-    pub fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<(), MemcacheError> {
-        for conn in self.connections.iter() {
-            let mut conn = conn.get()?;
-            match **conn {
-                Protocol::Ascii(ref mut protocol) => protocol.stream().set_read_timeout(timeout)?,
-                Protocol::Binary(ref mut protocol) => protocol.stream.set_read_timeout(timeout)?,
-            }
-        }
-        Ok(())
-    }
-
-    /// Set the socket write timeout for TCP connections.
-    ///
-    /// Example:
-    ///
-    /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345?protocol=ascii").unwrap();
-    /// client.set_write_timeout(Some(::std::time::Duration::from_secs(3))).unwrap();
-    /// ```
-    #[cfg(not(feature = "mcrouter"))]
-    pub fn set_write_timeout(&self, timeout: Option<Duration>) -> Result<(), MemcacheError> {
-        for conn in self.connections.iter() {
-            let mut conn = conn.get()?;
-            match **conn {
-                Protocol::Ascii(ref mut protocol) => protocol.stream().set_write_timeout(timeout)?,
-                Protocol::Binary(ref mut protocol) => protocol.stream.set_write_timeout(timeout)?,
-            }
-        }
-        Ok(())
+    /// Get ConnectionManager pool
+    pub fn get_pool(&self) -> Pool<ConnectionManager> {
+        self.0.clone()
     }
 
     /// Get the memcached server version.
@@ -153,17 +40,15 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// client.version().unwrap();
     /// ```
-    pub fn version(&self) -> Result<Vec<(String, String)>, MemcacheError> {
-        let mut result = Vec::with_capacity(self.connections.len());
-        for connection in self.connections.iter() {
-            let mut connection = connection.get()?;
-            let url = connection.get_url();
-            result.push((url, connection.version()?));
-        }
-        Ok(result)
+    pub fn version(&self) -> Result<String, MemcacheError> {
+        self.get_connection()?.version()
     }
 
     /// Flush all cache on memcached server immediately.
@@ -171,14 +56,15 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// client.flush().unwrap();
     /// ```
     pub fn flush(&self) -> Result<(), MemcacheError> {
-        for connection in self.connections.iter() {
-            connection.get()?.flush()?;
-        }
-        return Ok(());
+        self.get_connection()?.flush()
     }
 
     /// Flush all cache on memcached server with a delay seconds.
@@ -186,14 +72,15 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// client.flush_with_delay(10).unwrap();
     /// ```
     pub fn flush_with_delay(&self, delay: u32) -> Result<(), MemcacheError> {
-        for connection in self.connections.iter() {
-            connection.get()?.flush_with_delay(delay)?;
-        }
-        return Ok(());
+        self.get_connection()?.flush_with_delay(delay)
     }
 
     /// Get a key from memcached server.
@@ -201,12 +88,16 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// let _: Option<String> = client.get("foo").unwrap();
     /// ```
     pub fn get<V: FromMemcacheValueExt>(&self, key: &str) -> Result<Option<V>, MemcacheError> {
         check_key_len(key)?;
-        return self.get_connection(key).get()?.get(key);
+        self.get_connection()?.get(key)
     }
 
     /// Get multiple keys from memcached server. Using this function instead of calling `get` multiple times can reduce network workloads.
@@ -214,7 +105,11 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// client.set("foo", "42", 0).unwrap();
     /// let result: std::collections::HashMap<String, String> = client.gets(&["foo", "bar", "baz"]).unwrap();
     /// assert_eq!(result.len(), 1);
@@ -224,20 +119,7 @@ impl Client {
         for key in keys {
             check_key_len(key)?;
         }
-        let mut con_keys: HashMap<usize, Vec<&str>> = HashMap::new();
-        let mut result: HashMap<String, V> = HashMap::new();
-        let connections_count = self.connections.len();
-
-        for key in keys {
-            let connection_index = (self.hash_function)(key) as usize % connections_count;
-            let array = con_keys.entry(connection_index).or_insert_with(Vec::new);
-            array.push(key);
-        }
-        for (&connection_index, keys) in con_keys.iter() {
-            let connection = self.connections[connection_index].clone();
-            result.extend(connection.get()?.gets(keys)?);
-        }
-        return Ok(result);
+        self.get_connection()?.gets(keys)
     }
 
     /// Set a key with associate value into memcached server with expiration seconds.
@@ -245,13 +127,17 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// client.set("foo", "bar", 10).unwrap();
     /// # client.flush().unwrap();
     /// ```
     pub fn set<V: ToMemcacheValue<Stream>>(&self, key: &str, value: V, expiration: u32) -> Result<(), MemcacheError> {
         check_key_len(key)?;
-        return self.get_connection(key).get()?.set(key, value, expiration);
+        self.get_connection()?.set(key, value, expiration)
     }
 
     /// Compare and swap a key with the associate value into memcached server with expiration seconds.
@@ -261,7 +147,11 @@ impl Client {
     ///
     /// ```rust
     /// use std::collections::HashMap;
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// client.set("foo", "bar", 10).unwrap();
     /// let result: HashMap<String, (Vec<u8>, u32, Option<u64>)> = client.gets(&["foo"]).unwrap();
     /// let (_, _, cas) = result.get("foo").unwrap();
@@ -277,7 +167,7 @@ impl Client {
         cas_id: u64,
     ) -> Result<bool, MemcacheError> {
         check_key_len(key)?;
-        self.get_connection(key).get()?.cas(key, value, expiration, cas_id)
+        self.get_connection()?.cas(key, value, expiration, cas_id)
     }
 
     /// Add a key with associate value into memcached server with expiration seconds.
@@ -285,7 +175,11 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// let key = "add_test";
     /// client.delete(key).unwrap();
     /// client.add(key, "bar", 100000000).unwrap();
@@ -293,7 +187,7 @@ impl Client {
     /// ```
     pub fn add<V: ToMemcacheValue<Stream>>(&self, key: &str, value: V, expiration: u32) -> Result<(), MemcacheError> {
         check_key_len(key)?;
-        return self.get_connection(key).get()?.add(key, value, expiration);
+        self.get_connection()?.add(key, value, expiration)
     }
 
     /// Replace a key with associate value into memcached server with expiration seconds.
@@ -301,7 +195,11 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// let key = "replace_test";
     /// client.set(key, "bar", 0).unwrap();
     /// client.replace(key, "baz", 100000000).unwrap();
@@ -314,7 +212,7 @@ impl Client {
         expiration: u32,
     ) -> Result<(), MemcacheError> {
         check_key_len(key)?;
-        return self.get_connection(key).get()?.replace(key, value, expiration);
+        self.get_connection()?.replace(key, value, expiration)
     }
 
     /// Append value to the key.
@@ -322,7 +220,11 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// let key = "key_to_append";
     /// client.set(key, "hello", 0).unwrap();
     /// client.append(key, ", world!").unwrap();
@@ -332,7 +234,7 @@ impl Client {
     /// ```
     pub fn append<V: ToMemcacheValue<Stream>>(&self, key: &str, value: V) -> Result<(), MemcacheError> {
         check_key_len(key)?;
-        return self.get_connection(key).get()?.append(key, value);
+        self.get_connection()?.append(key, value)
     }
 
     /// Prepend value to the key.
@@ -340,7 +242,11 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// let key = "key_to_append";
     /// client.set(key, "world!", 0).unwrap();
     /// client.prepend(key, "hello, ").unwrap();
@@ -350,7 +256,7 @@ impl Client {
     /// ```
     pub fn prepend<V: ToMemcacheValue<Stream>>(&self, key: &str, value: V) -> Result<(), MemcacheError> {
         check_key_len(key)?;
-        return self.get_connection(key).get()?.prepend(key, value);
+        self.get_connection()?.prepend(key, value)
     }
 
     /// Delete a key from memcached server.
@@ -358,13 +264,17 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// client.delete("foo").unwrap();
     /// # client.flush().unwrap();
     /// ```
     pub fn delete(&self, key: &str) -> Result<bool, MemcacheError> {
         check_key_len(key)?;
-        return self.get_connection(key).get()?.delete(key);
+        self.get_connection()?.delete(key)
     }
 
     /// Increment the value with amount.
@@ -372,13 +282,17 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// client.increment("counter", 42).unwrap();
     /// # client.flush().unwrap();
     /// ```
     pub fn increment(&self, key: &str, amount: u64) -> Result<u64, MemcacheError> {
         check_key_len(key)?;
-        return self.get_connection(key).get()?.increment(key, amount);
+        self.get_connection()?.increment(key, amount)
     }
 
     /// Decrement the value with amount.
@@ -386,13 +300,17 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// client.decrement("counter", 42).unwrap();
     /// # client.flush().unwrap();
     /// ```
     pub fn decrement(&self, key: &str, amount: u64) -> Result<u64, MemcacheError> {
         check_key_len(key)?;
-        return self.get_connection(key).get()?.decrement(key, amount);
+        self.get_connection()?.decrement(key, amount)
     }
 
     /// Set a new expiration time for a exist key.
@@ -400,7 +318,11 @@ impl Client {
     /// Example:
     ///
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// assert_eq!(client.touch("not_exists_key", 12345).unwrap(), false);
     /// client.set("foo", "bar", 123).unwrap();
     /// assert_eq!(client.touch("foo", 12345).unwrap(), true);
@@ -408,63 +330,71 @@ impl Client {
     /// ```
     pub fn touch(&self, key: &str, expiration: u32) -> Result<bool, MemcacheError> {
         check_key_len(key)?;
-        return self.get_connection(key).get()?.touch(key, expiration);
+        self.get_connection()?.touch(key, expiration)
     }
 
     /// Get all servers' statistics.
     ///
     /// Example:
     /// ```rust
-    /// let client = memcache::Client::connect("memcache://localhost:12345").unwrap();
+    /// let pool = memcache::Pool::builder()
+    /// .connection_timeout(std::time::Duration::from_secs(1))
+    /// .build(memcache::ConnectionManager::new("memcache://localhost:12345").unwrap())
+    /// .unwrap();
+    /// let client = memcache::Client::with_pool(pool);
     /// let stats = client.stats().unwrap();
     /// ```
-    pub fn stats(&self) -> Result<Vec<(String, Stats)>, MemcacheError> {
-        let mut result: Vec<(String, HashMap<String, String>)> = vec![];
-        for connection in self.connections.iter() {
-            let mut connection = connection.get()?;
-            let stats_info = connection.stats()?;
-            let url = connection.get_url();
-            result.push((url, stats_info));
-        }
-        return Ok(result);
+    pub fn stats(&self) -> Result<Stats, MemcacheError> {
+        self.get_connection()?.stats()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn connect(target: &str) -> Result<Client, MemcacheError> {
+        let pool = r2d2::Pool::builder()
+            .max_size(20)
+            .connection_timeout(Duration::from_millis(500))
+            .build(ConnectionManager::new(target)?)?;
+
+        Ok(Client::with_pool(pool))
+    }
+
     #[cfg(unix)]
     #[test]
     fn unix() {
-        let client = super::Client::connect("memcache:///tmp/memcached.sock").unwrap();
-        assert!(client.version().unwrap()[0].1 != "");
+        let client = connect("memcache:///tmp/memcached.sock").unwrap();
+        assert!(client.version().unwrap() != "");
     }
 
     #[cfg(feature = "tls")]
     #[test]
     fn ssl_noverify() {
-        let client = super::Client::connect("memcache+tls://localhost:12350?verify_mode=none").unwrap();
-        assert!(client.version().unwrap()[0].1 != "");
+        let client = connect("memcache+tls://localhost:12350?verify_mode=none").unwrap();
+        assert!(client.version().unwrap() != "");
     }
 
     #[cfg(feature = "tls")]
     #[test]
     fn ssl_verify() {
         let client =
-            super::Client::connect("memcache+tls://localhost:12350?ca_path=tests/assets/RUST_MEMCACHE_TEST_CERT.crt")
-                .unwrap();
-        assert!(client.version().unwrap()[0].1 != "");
+            connect("memcache+tls://localhost:12350?ca_path=tests/assets/RUST_MEMCACHE_TEST_CERT.crt").unwrap();
+        assert!(client.version().unwrap() != "");
     }
 
     #[cfg(feature = "tls")]
     #[test]
     fn ssl_client_certs() {
-        let client = super::Client::connect("memcache+tls://localhost:12351?key_path=tests/assets/client.key&cert_path=tests/assets/client.crt&ca_path=tests/assets/RUST_MEMCACHE_TEST_CERT.crt").unwrap();
-        assert!(client.version().unwrap()[0].1 != "");
+        let client = connect("memcache+tls://localhost:12351?key_path=tests/assets/client.key&cert_path=tests/assets/client.crt&ca_path=tests/assets/RUST_MEMCACHE_TEST_CERT.crt").unwrap();
+        assert!(client.version().unwrap() != "");
     }
 
     #[test]
     fn delete() {
-        let client = super::Client::connect("memcache://localhost:12345").unwrap();
+        let client = connect("memcache://localhost:12345").unwrap();
         client.set("an_exists_key", "value", 0).unwrap();
         assert_eq!(client.delete("an_exists_key").unwrap(), true);
         assert_eq!(client.delete("a_not_exists_key").unwrap(), false);
@@ -472,7 +402,7 @@ mod tests {
 
     #[test]
     fn increment() {
-        let client = super::Client::connect("memcache://localhost:12345").unwrap();
+        let client = connect("memcache://localhost:12345").unwrap();
         client.delete("counter").unwrap();
         client.set("counter", 321, 0).unwrap();
         assert_eq!(client.increment("counter", 123).unwrap(), 444);

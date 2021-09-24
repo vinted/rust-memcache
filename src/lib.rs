@@ -33,7 +33,12 @@ memcache = "*"
 
 ```rust
 // create connection with to memcached server node:
-let client = memcache::connect("memcache://127.0.0.1:12345?timeout=10&tcp_nodelay=true").unwrap();
+let pool = memcache::Pool::builder()
+  .connection_timeout(std::time::Duration::from_secs(1))
+  .build(memcache::ConnectionManager::new("memcache://127.0.0.1:12345?timeout=10&tcp_nodelay=true").unwrap())
+  .unwrap();
+
+let client = memcache::Client::with_pool(pool);
 
 // flush the database:
 client.flush().unwrap();
@@ -80,24 +85,12 @@ mod protocol;
 mod stream;
 mod value;
 
-pub use crate::client::{Client, Connectable};
+pub use crate::client::Client;
 pub use crate::connection::ConnectionManager;
 pub use crate::error::{ClientError, CommandError, MemcacheError, ServerError};
 pub use crate::stream::Stream;
 pub use crate::value::{FromMemcacheValue, FromMemcacheValueExt, ToMemcacheValue};
-pub use r2d2::Error;
-pub use url::{ParseError as UrlParseError, Url};
+pub use r2d2::Error as PoolError;
 
 /// R2D2 connection pool
 pub type Pool = r2d2::Pool<connection::ConnectionManager>;
-
-/// Create a memcached client instance and connect to memcached server.
-///
-/// Example:
-///
-/// ```rust
-/// let client = memcache::connect("memcache://localhost:12345").unwrap();
-/// ```
-pub fn connect<C: Connectable>(target: C) -> Result<Client, MemcacheError> {
-    Client::connect(target)
-}

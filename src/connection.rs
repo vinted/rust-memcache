@@ -3,7 +3,6 @@ use std::ops::{Deref, DerefMut};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
-use std::time::Duration;
 use url::Url;
 
 use crate::error::MemcacheError;
@@ -35,14 +34,16 @@ impl Deref for Connection {
 }
 
 /// Memcache connection manager implementing rd2d Pool ManageConnection
+#[derive(Debug)]
 pub struct ConnectionManager {
     url: Url,
 }
 
 impl ConnectionManager {
     /// Initialize connection manager with given Url
-    pub fn new(url: Url) -> Self {
-        Self { url }
+    pub fn new(target: impl AsRef<str>) -> Result<Self, MemcacheError> {
+        let url = Url::parse(target.as_ref())?;
+        Ok(Self { url })
     }
 }
 
@@ -90,7 +91,6 @@ struct TlsOptions {
 }
 
 struct TcpOptions {
-    timeout: Option<Duration>,
     nodelay: bool,
 }
 
@@ -145,15 +145,8 @@ impl TcpOptions {
         let nodelay = !url
             .query_pairs()
             .any(|(ref k, ref v)| k == "tcp_nodelay" && v == "false");
-        let timeout = url
-            .query_pairs()
-            .find(|&(ref k, ref _v)| k == "timeout")
-            .and_then(|(ref _k, ref v)| v.parse::<u64>().ok())
-            .map(Duration::from_secs);
-        TcpOptions {
-            nodelay: nodelay,
-            timeout: timeout,
-        }
+
+        Self { nodelay }
     }
 }
 
@@ -202,19 +195,11 @@ impl Transport {
 
 fn tcp_stream(url: &Url, opts: &TcpOptions) -> Result<TcpStream, MemcacheError> {
     let tcp_stream = TcpStream::connect(&*url.socket_addrs(|| None)?)?;
-    if cfg!(not(feature = "mcrouter")) && opts.timeout.is_some() {
-        tcp_stream.set_read_timeout(opts.timeout)?;
-        tcp_stream.set_write_timeout(opts.timeout)?;
-    }
     tcp_stream.set_nodelay(opts.nodelay)?;
     Ok(tcp_stream)
 }
 
 impl Connection {
-    pub(crate) fn get_url(&self) -> String {
-        self.url.to_string()
-    }
-
     pub(crate) fn connect(url: &Url) -> Result<Self, MemcacheError> {
         let transport = Transport::from_url(url)?;
         let is_ascii = url.query_pairs().any(|(ref k, ref v)| k == "protocol" && v == "ascii");

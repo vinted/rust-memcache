@@ -8,9 +8,6 @@ use std::net::UdpSocket;
 use std::u16;
 use url::Url;
 
-#[cfg(not(feature = "mcrouter"))]
-use std::time::Duration;
-
 pub struct UdpStream {
     socket: UdpSocket,
     read_buf: Vec<u8>,
@@ -28,16 +25,6 @@ impl UdpStream {
             write_buf: Vec::new(),
             request_id: rand::random::<u16>(),
         });
-    }
-
-    #[cfg(not(feature = "mcrouter"))]
-    pub(crate) fn set_read_timeout(&self, duration: Option<Duration>) -> Result<(), MemcacheError> {
-        Ok(self.socket.set_read_timeout(duration)?)
-    }
-
-    #[cfg(not(feature = "mcrouter"))]
-    pub(crate) fn set_write_timeout(&self, duration: Option<Duration>) -> Result<(), MemcacheError> {
-        Ok(self.socket.set_write_timeout(duration)?)
     }
 }
 
