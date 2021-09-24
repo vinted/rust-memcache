@@ -6,7 +6,6 @@ use std::io;
 use std::num;
 use std::str;
 use std::string;
-use url;
 
 /// Client-side errors
 #[derive(Debug, PartialEq)]

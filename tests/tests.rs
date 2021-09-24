@@ -3,10 +3,13 @@ extern crate rand;
 
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
+use std::collections::HashMap;
 use std::iter;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time;
+
+mod helpers;
 
 fn gen_random_key() -> String {
     let bs = iter::repeat(())
@@ -17,83 +20,8 @@ fn gen_random_key() -> String {
 }
 
 #[test]
-fn test() {
-    let mut urls = vec![
-        "memcache://localhost:12346?tcp_nodelay=true",
-        "memcache://localhost:12347?timeout=10",
-        "memcache://localhost:12348?protocol=ascii",
-        "memcache://localhost:12349?",
-        "memcache+tls://localhost:12350?verify_mode=none",
-    ];
-    if cfg!(unix) {
-        urls.push("memcache:///tmp/memcached2.sock");
-    }
-    let client = memcache::Client::connect(urls).unwrap();
-
-    client.version().unwrap();
-
-    client.set("foo", "bar", 0).unwrap();
-    client.flush().unwrap();
-    let value: Option<String> = client.get("foo").unwrap();
-    assert_eq!(value, None);
-
-    client.set("foo", "bar", 0).unwrap();
-    client.flush_with_delay(3).unwrap();
-    let value: Option<String> = client.get("foo").unwrap();
-    assert_eq!(value, Some(String::from("bar")));
-    thread::sleep(time::Duration::from_secs(4));
-    let value: Option<String> = client.get("foo").unwrap();
-    assert_eq!(value, None);
-
-    let mut keys: Vec<String> = Vec::new();
-    for _ in 0..1000 {
-        let key = gen_random_key();
-        keys.push(key.clone());
-        client.set(key.as_str(), "xxx", 0).unwrap();
-    }
-
-    for key in keys {
-        let value: String = client.get(key.as_str()).unwrap().unwrap();
-        assert_eq!(value, "xxx");
-    }
-}
-
-#[test]
-fn issue74() {
-    use memcache::{Client, CommandError, MemcacheError};
-    let client = Client::connect("memcache://localhost:12346?tcp_nodelay=true").unwrap();
-    client.delete("issue74").unwrap();
-    client.add("issue74", 1, 0).unwrap();
-
-    match client.add("issue74", 1, 0) {
-        Ok(_) => panic!("Should got an error!"),
-        Err(e) => match e {
-            MemcacheError::CommandError(e) => assert!(e == CommandError::KeyExists),
-            _ => panic!("Unexpected error!"),
-        },
-    }
-
-    match client.add("issue74", 1, 0) {
-        Ok(_) => panic!("Should got an error!"),
-        Err(e) => match e {
-            MemcacheError::CommandError(e) => assert!(e == CommandError::KeyExists),
-            _ => panic!("Unexpected error!"),
-        },
-    }
-
-    match client.add("issue74", 1, 0) {
-        Ok(_) => panic!("Should got an error!"),
-        Err(e) => match e {
-            MemcacheError::CommandError(e) => assert!(e == CommandError::KeyExists),
-            _ => panic!("Unexpected error!"),
-        },
-    }
-}
-
-#[test]
 fn udp_test() {
-    let urls = vec!["memcache+udp://localhost:22345"];
-    let client = memcache::Client::connect(urls).unwrap();
+    let client = helpers::connect("memcache+udp://localhost:22345").unwrap();
 
     client.version().unwrap();
 
@@ -169,7 +97,7 @@ fn udp_test() {
         handles.push(Some(thread::spawn(move || {
             let key = format!("key{}", i);
             let value = format!("value{}", i);
-            let client = memcache::Client::connect("memcache://localhost:22345?udp=true").unwrap();
+            let client = helpers::connect("memcache://localhost:22345?udp=true").unwrap();
             for j in 0..50 {
                 let value = format!("{}{}", value, j);
                 client.set(key.as_str(), &value, 0).unwrap();
@@ -209,11 +137,9 @@ fn udp_test() {
 
 #[test]
 fn test_cas() {
-    use memcache::Client;
-    use std::collections::HashMap;
     let clients = vec![
-        Client::connect("memcache://localhost:12345").unwrap(),
-        Client::connect("memcache://localhost:12345?protocol=ascii").unwrap(),
+        helpers::connect("memcache://localhost:12345").unwrap(),
+        helpers::connect("memcache://localhost:12345?protocol=ascii").unwrap(),
     ];
     for client in clients {
         client.flush().unwrap();

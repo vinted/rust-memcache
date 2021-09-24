@@ -12,7 +12,6 @@ edition = "2018"
 [features]
 default = ["tls"]
 tls = ["openssl"]
-mcrouter = []
 
 [dependencies]
 byteorder = "1"

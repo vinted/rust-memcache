@@ -5,14 +5,8 @@ use std::net::TcpStream;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 
-#[cfg(not(feature = "mcrouter"))]
-use std::time::Duration;
-
 #[cfg(feature = "tls")]
 use openssl::ssl::SslStream;
-
-#[cfg(not(feature = "mcrouter"))]
-use crate::error::MemcacheError;
 
 pub(crate) use self::udp_stream::UdpStream;
 
@@ -23,34 +17,6 @@ pub enum Stream {
     Unix(UnixStream),
     #[cfg(feature = "tls")]
     Tls(SslStream<TcpStream>),
-}
-
-impl Stream {
-    #[cfg(not(feature = "mcrouter"))]
-    pub(super) fn set_read_timeout(&mut self, timeout: Option<Duration>) -> Result<(), MemcacheError> {
-        match self {
-            Stream::Tcp(ref conn) => conn.set_read_timeout(timeout)?,
-            #[cfg(unix)]
-            Stream::Unix(ref conn) => conn.set_read_timeout(timeout)?,
-            #[cfg(feature = "tls")]
-            Stream::Tls(ref stream) => stream.get_ref().set_read_timeout(timeout)?,
-            Stream::Udp(ref conn) => conn.set_read_timeout(timeout)?,
-        }
-        Ok(())
-    }
-
-    #[cfg(not(feature = "mcrouter"))]
-    pub(super) fn set_write_timeout(&mut self, timeout: Option<Duration>) -> Result<(), MemcacheError> {
-        match self {
-            Stream::Tcp(ref conn) => conn.set_write_timeout(timeout)?,
-            #[cfg(unix)]
-            Stream::Unix(ref conn) => conn.set_write_timeout(timeout)?,
-            #[cfg(feature = "tls")]
-            Stream::Tls(ref stream) => stream.get_ref().set_write_timeout(timeout)?,
-            Stream::Udp(ref conn) => conn.set_write_timeout(timeout)?,
-        }
-        Ok(())
-    }
 }
 
 impl Read for Stream {
