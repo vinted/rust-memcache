@@ -11,7 +11,7 @@ use std::time::Duration;
 #[cfg(feature = "tls")]
 use openssl::ssl::SslStream;
 
-#[cfg(feature = "tls")]
+#[cfg(not(feature = "mcrouter"))]
 use crate::error::MemcacheError;
 
 pub(crate) use self::udp_stream::UdpStream;
