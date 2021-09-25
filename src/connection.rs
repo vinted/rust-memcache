@@ -48,7 +48,7 @@ impl ConnectionManager {
     }
 
     /// Set ASCII protocol
-    pub fn set_ascii(&mut self) -> &mut Self {
+    pub fn set_ascii_protocol(mut self) -> Self {
         let mut query_pairs: HashMap<String, String> = self.url.query_pairs().into_owned().collect();
         let _ = query_pairs.insert("protocol".into(), "ascii".into());
 
@@ -282,17 +282,15 @@ mod tests {
     }
 
     #[test]
-    fn test_set_ascii() {
+    fn test_set_ascii_protocol() {
         let url = "memcache:///tmp/memcached.sock";
-        let mut cm = ConnectionManager::new(url).unwrap();
-        cm.set_ascii();
+        let cm = ConnectionManager::new(url).unwrap().set_ascii_protocol();
 
         assert_eq!(cm.url.as_str(), &format!("{}?protocol=ascii", url));
 
         let url = "memcache:///tmp/memcached.sock?query=1&protocol=binary";
-        let mut cm = ConnectionManager::new(url).unwrap();
-        cm.set_ascii();
+        let cm = ConnectionManager::new(url).unwrap().set_ascii_protocol();
 
-        assert_eq!(cm.url.as_str(), url.replace("binary", "ascii"));
+        assert!(cm.url.as_str().contains("protocol=ascii"));
     }
 }
