@@ -61,9 +61,6 @@ let value: Option<String> = client.get("foo").unwrap();
 assert_eq!(value, Some(String::from("bar")));
 assert_eq!(value.unwrap(), "bar");
 
-// prepend, append:
-client.prepend("foo", "foo").unwrap();
-client.append("foo", "baz").unwrap();
 let value: String = client.get("foo").unwrap().unwrap();
 assert_eq!(value, "foobarbaz");
 

@@ -232,12 +232,15 @@ pub enum MemcacheError {
     ServerError(ServerError),
     /// Command specific Errors
     CommandError(CommandError),
+    /// OpenSSL error
     #[cfg(feature = "tls")]
     OpensslError(openssl::ssl::HandshakeError<std::net::TcpStream>),
     /// Parse errors
     ParseError(ParseError),
     /// ConnectionPool errors
     PoolError(r2d2::Error),
+    /// Bincode error
+    Bincode(bincode::Error),
 }
 
 impl fmt::Display for MemcacheError {
@@ -252,6 +255,7 @@ impl fmt::Display for MemcacheError {
             MemcacheError::ServerError(ref err) => err.fmt(f),
             MemcacheError::CommandError(ref err) => err.fmt(f),
             MemcacheError::PoolError(ref err) => err.fmt(f),
+            MemcacheError::Bincode(ref err) => err.fmt(f),
         }
     }
 }
@@ -268,6 +272,7 @@ impl error::Error for MemcacheError {
             MemcacheError::ServerError(_) => None,
             MemcacheError::CommandError(_) => None,
             MemcacheError::PoolError(ref p) => p.source(),
+            MemcacheError::Bincode(ref p) => p.source(),
         }
     }
 }
@@ -295,5 +300,11 @@ impl From<openssl::ssl::HandshakeError<std::net::TcpStream>> for MemcacheError {
 impl From<r2d2::Error> for MemcacheError {
     fn from(err: r2d2::Error) -> MemcacheError {
         MemcacheError::PoolError(err)
+    }
+}
+
+impl From<bincode::Error> for MemcacheError {
+    fn from(err: bincode::Error) -> MemcacheError {
+        MemcacheError::Bincode(err)
     }
 }

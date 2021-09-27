@@ -16,6 +16,7 @@ use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use r2d2::ManageConnection;
 
 /// A connection to the memcached server
+#[allow(missing_debug_implementations)]
 pub struct Connection {
     pub protocol: Protocol,
     pub url: Arc<String>,
@@ -54,11 +55,11 @@ impl ConnectionManager {
 
         {
             let mut query_pairs_mut = self.url.query_pairs_mut();
-            query_pairs_mut.clear();
+            let _ = query_pairs_mut.clear();
             for (k, v) in query_pairs {
-                query_pairs_mut.append_pair(&k, &v);
+                let _ = query_pairs_mut.append_pair(&k, &v);
             }
-            query_pairs_mut.finish();
+            let _ = query_pairs_mut.finish();
         }
         self
     }

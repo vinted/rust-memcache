@@ -10,11 +10,17 @@ use openssl::ssl::SslStream;
 
 pub(crate) use self::udp_stream::UdpStream;
 
+/// Stream of memcache connection
+#[allow(missing_debug_implementations)]
 pub enum Stream {
+    /// TCP stream
     Tcp(TcpStream),
+    /// UDP stream
     Udp(UdpStream),
+    /// Unix stream
     #[cfg(unix)]
     Unix(UnixStream),
+    /// TLS stream
     #[cfg(feature = "tls")]
     Tls(SslStream<TcpStream>),
 }

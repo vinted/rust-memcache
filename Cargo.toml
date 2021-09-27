@@ -15,8 +15,10 @@ tls = ["openssl"]
 
 [dependencies]
 byteorder = "1"
-url = "2.1.1"
-rand = "0.8"
+url = { version = "2", default-features = false }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 enum_dispatch = "0.3"
 openssl = { version = "^0.10", optional = true }
 r2d2 = "0.8.8"
+serde = { version = "1", default-features = false }
+bincode = { version = "1.3", default-features = false }

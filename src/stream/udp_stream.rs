@@ -8,6 +8,7 @@ use std::net::UdpSocket;
 use std::u16;
 use url::Url;
 
+#[derive(Debug)]
 pub struct UdpStream {
     socket: UdpSocket,
     read_buf: Vec<u8>,
@@ -35,7 +36,7 @@ impl Read for UdpStream {
             buf_len = self.read_buf.len();
         }
         buf[0..buf_len].copy_from_slice(&(self.read_buf[0..buf_len]));
-        self.read_buf.drain(0..buf_len);
+        let _ = self.read_buf.drain(0..buf_len);
         Ok(buf_len)
     }
 }
@@ -54,8 +55,8 @@ impl Write for UdpStream {
         udp_header.write_u16::<BigEndian>(0)?; // 0 indicates this is the first datagram for this request
         udp_header.write_u16::<BigEndian>(1)?; // total datagrams in this request (requests can only be 1 datagram long)
         udp_header.write_u16::<BigEndian>(0)?; // reserved bytes
-        self.write_buf.splice(0..0, udp_header.iter().cloned());
-        self.socket.send(self.write_buf.as_slice())?;
+        let _ = self.write_buf.splice(0..0, udp_header.iter().cloned());
+        let _ = self.socket.send(self.write_buf.as_slice())?;
         self.write_buf.clear(); // clear the buffer for the next command
 
         let mut response_datagrams: HashMap<u16, Vec<u8>> = HashMap::new();
@@ -84,7 +85,7 @@ impl Write for UdpStream {
 
             let mut v: Vec<u8> = Vec::new();
             v.extend_from_slice(&buf[8..bytes_read]);
-            response_datagrams.insert(sequence_no, v);
+            let _ = response_datagrams.insert(sequence_no, v);
             remaining_datagrams -= 1;
             if remaining_datagrams == 0 {
                 break;
